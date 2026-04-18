@@ -13,7 +13,7 @@ const jetbrainsMono = JetBrains_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Game Moments Hub",
+  title: "Opičí Klub Fotky",
   description: "Chronological feed of game sessions with photo collages.",
 };
 

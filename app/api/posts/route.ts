@@ -24,6 +24,12 @@ const allowedExtensions = new Set([
   ".avif",
 ]);
 
+const allowedGameTitles = new Set([
+  "League of Legends",
+  "Goose Goose Duck",
+  "Brawlhalla",
+]);
+
 function extensionFromFile(file: File) {
   const byName = file.name?.toLowerCase().match(/\.[^.]+$/)?.[0];
 
@@ -47,6 +53,18 @@ async function cleanupUploadedImages(images: StoredImage[]) {
   await supabaseServer.storage
     .from("game-images")
     .remove(images.map((image) => image.filePath));
+}
+
+function storagePathFromPublicUrl(url: string) {
+  const marker = "/storage/v1/object/public/game-images/";
+  const markerIndex = url.indexOf(marker);
+
+  if (markerIndex === -1) {
+    return null;
+  }
+
+  const pathPart = url.slice(markerIndex + marker.length);
+  return decodeURIComponent(pathPart);
 }
 
 export async function GET() {
@@ -95,9 +113,14 @@ export async function POST(request: Request) {
     const supabaseServer = getSupabaseServerClient();
     const formData = await request.formData();
     const rawGameTitle = formData.get("gameTitle");
+    const normalizedGameTitle =
+      typeof rawGameTitle === "string" ? rawGameTitle.trim() : "";
 
-    if (typeof rawGameTitle !== "string" || !rawGameTitle.trim()) {
-      return Response.json({ error: "Nazev hry je povinny." }, { status: 400 });
+    if (!allowedGameTitles.has(normalizedGameTitle)) {
+      return Response.json(
+        { error: "Vyber validni hru ze seznamu." },
+        { status: 400 },
+      );
     }
 
     const photos = formData
@@ -153,7 +176,7 @@ export async function POST(request: Request) {
     // Create post only after images are uploaded.
     const { data: postData, error: postError } = await supabaseServer
       .from("game_posts")
-      .insert({ game_title: rawGameTitle.trim() })
+      .insert({ game_title: normalizedGameTitle })
       .select()
       .single();
 
@@ -191,6 +214,64 @@ export async function POST(request: Request) {
       {
         error:
           err instanceof Error ? err.message : "Chyba pri ukladani prispevku.",
+      },
+      { status: 500 },
+    );
+  }
+}
+
+export async function DELETE(request: Request) {
+  try {
+    const supabaseServer = getSupabaseServerClient();
+    const requestUrl = new URL(request.url);
+    const postId = requestUrl.searchParams.get("id");
+
+    if (!postId) {
+      return Response.json({ error: "Chybi id prispevku." }, { status: 400 });
+    }
+
+    const { data: imageRows, error: imageRowsError } = await supabaseServer
+      .from("post_images")
+      .select("image_url")
+      .eq("post_id", postId);
+
+    if (imageRowsError) {
+      throw imageRowsError;
+    }
+
+    const { error: deletePostError } = await supabaseServer
+      .from("game_posts")
+      .delete()
+      .eq("id", postId);
+
+    if (deletePostError) {
+      throw deletePostError;
+    }
+
+    const storagePaths = (imageRows ?? [])
+      .map((row) => storagePathFromPublicUrl(row.image_url))
+      .filter((value): value is string => Boolean(value));
+
+    if (storagePaths.length > 0) {
+      const { error: removeStorageError } = await supabaseServer.storage
+        .from("game-images")
+        .remove(storagePaths);
+
+      if (removeStorageError) {
+        console.error(
+          "DELETE /api/posts storage cleanup error:",
+          removeStorageError,
+        );
+      }
+    }
+
+    return Response.json({ ok: true });
+  } catch (err) {
+    console.error("DELETE /api/posts error:", err);
+    return Response.json(
+      {
+        error:
+          err instanceof Error ? err.message : "Chyba pri mazani prispevku.",
       },
       { status: 500 },
     );

@@ -1,7 +1,15 @@
 "use client";
 
 import Image from "next/image";
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import Link from "next/link";
+import { FormEvent, useEffect, useId, useMemo, useState } from "react";
+import Lightbox from "yet-another-react-lightbox";
+import Captions from "yet-another-react-lightbox/plugins/captions";
+import Thumbnails from "yet-another-react-lightbox/plugins/thumbnails";
+import Zoom from "yet-another-react-lightbox/plugins/zoom";
+import "yet-another-react-lightbox/styles.css";
+import "yet-another-react-lightbox/plugins/captions.css";
+import "yet-another-react-lightbox/plugins/thumbnails.css";
 import styles from "./page.module.css";
 
 type GamePost = {
@@ -10,6 +18,12 @@ type GamePost = {
   createdAt: string;
   images: string[];
 };
+
+const ALLOWED_GAMES = [
+  "League of Legends",
+  "Goose Goose Duck",
+  "Brawlhalla",
+] as const;
 
 function formatDateLabel(isoDate: string) {
   const date = new Date(isoDate);
@@ -21,15 +35,16 @@ function formatDateLabel(isoDate: string) {
 }
 
 export default function Home() {
+  const fileInputId = useId();
   const [posts, setPosts] = useState<GamePost[]>([]);
   const [gameTitle, setGameTitle] = useState("");
   const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
   const [isSaving, setIsSaving] = useState(false);
+  const [deletingPostId, setDeletingPostId] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [errorMessage, setErrorMessage] = useState("");
   const [lightbox, setLightbox] = useState<{
-    images: string[];
-    gameTitle: string;
+    slides: { src: string; title: string }[];
     index: number;
   } | null>(null);
 
@@ -63,12 +78,17 @@ export default function Home() {
     [posts],
   );
 
+  const totalPhotos = useMemo(
+    () => posts.reduce((sum, post) => sum + post.images.length, 0),
+    [posts],
+  );
+
   const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     setErrorMessage("");
 
-    if (!gameTitle.trim()) {
-      setErrorMessage("Vypln nazev hry.");
+    if (!gameTitle) {
+      setErrorMessage("Vyber hru ze seznamu.");
       return;
     }
 
@@ -81,7 +101,7 @@ export default function Home() {
 
     try {
       const formData = new FormData();
-      formData.append("gameTitle", gameTitle.trim());
+      formData.append("gameTitle", gameTitle);
       selectedFiles.forEach((file) => formData.append("photos", file));
 
       const response = await fetch("/api/posts", {
@@ -117,86 +137,130 @@ export default function Home() {
   };
 
   const openLightbox = (post: GamePost, index: number) => {
-    setLightbox({ images: post.images, gameTitle: post.gameTitle, index });
-  };
-
-  const closeLightbox = () => {
-    setLightbox(null);
-  };
-
-  const shiftLightbox = (direction: 1 | -1) => {
-    setLightbox((current) => {
-      if (!current) {
-        return current;
-      }
-
-      const nextIndex =
-        (current.index + direction + current.images.length) %
-        current.images.length;
-
-      return { ...current, index: nextIndex };
+    setLightbox({
+      slides: post.images.map((imageSrc, imageIndex) => ({
+        src: imageSrc,
+        title: `${post.gameTitle} - ${imageIndex + 1}/${post.images.length}`,
+      })),
+      index,
     });
   };
 
-  useEffect(() => {
-    if (!lightbox) {
+  const handleDeletePost = async (post: GamePost) => {
+    const shouldDelete = window.confirm(
+      `Opravdu chces smazat prispevek \"${post.gameTitle}\"? Tuto akci nelze vratit.`,
+    );
+
+    if (!shouldDelete) {
       return;
     }
 
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        closeLightbox();
+    setErrorMessage("");
+    setDeletingPostId(post.id);
+
+    try {
+      const response = await fetch(
+        `/api/posts?id=${encodeURIComponent(post.id)}`,
+        {
+          method: "DELETE",
+        },
+      );
+
+      if (!response.ok) {
+        const errorPayload = (await response.json().catch(() => null)) as {
+          error?: string;
+        } | null;
+
+        throw new Error(
+          errorPayload?.error || "Prispevek se nepodarilo smazat.",
+        );
       }
 
-      if (event.key === "ArrowLeft") {
-        shiftLightbox(-1);
-      }
-
-      if (event.key === "ArrowRight") {
-        shiftLightbox(1);
-      }
-    };
-
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, [lightbox]);
+      setPosts((current) => current.filter((item) => item.id !== post.id));
+    } catch (error) {
+      setErrorMessage(
+        error instanceof Error
+          ? error.message
+          : "Prispevek se nepodarilo smazat.",
+      );
+    } finally {
+      setDeletingPostId(null);
+    }
+  };
 
   return (
     <div className={styles.page}>
       <main className={styles.shell}>
         <section className={styles.hero}>
           <p className={styles.kicker}>discord gaming timeline</p>
-          <h1>Game Moments Hub</h1>
-          <p>
-            Pridej nazev hry a fotky. Jakmile je fotek vic, system je
-            automaticky slozi do kolaze a vlozi nahoru do feedu podle aktualniho
-            data.
-          </p>
+          <h1>Opičí Klub Fotky</h1>
+          <p className={styles.heroLead}>Vše co hrajem, davejte sem fotky.</p>
+          <div className={styles.heroActions}>
+            <Link href="/analyza" className={styles.analysisLink}>
+              Otevrit analyzu her
+            </Link>
+          </div>
+          <div className={styles.heroMetrics}>
+            <article className={styles.metricCard}>
+              <span>Prispevky</span>
+              <strong>{posts.length}</strong>
+            </article>
+            <article className={styles.metricCard}>
+              <span>Nahrane fotky</span>
+              <strong>{totalPhotos}</strong>
+            </article>
+            <article className={styles.metricCard}>
+              <span>Aktivni hry</span>
+              <strong>{ALLOWED_GAMES.length}</strong>
+            </article>
+          </div>
         </section>
 
         <section className={styles.composerCard}>
           <form onSubmit={handleSubmit} className={styles.form}>
             <label htmlFor="title">Nazev hry</label>
-            <input
+            <select
               id="title"
-              type="text"
               value={gameTitle}
               onChange={(event) => setGameTitle(event.target.value)}
-              placeholder="napr. Helldivers 2"
-              maxLength={80}
-            />
+            >
+              <option value="">Vyber hru</option>
+              {ALLOWED_GAMES.map((game) => (
+                <option key={game} value={game}>
+                  {game}
+                </option>
+              ))}
+            </select>
 
-            <label htmlFor="photos">Fotky ze session</label>
-            <input
-              id="photos"
-              type="file"
-              accept="image/*"
-              multiple
-              onChange={(event) => {
-                const files = Array.from(event.target.files ?? []);
-                setSelectedFiles(files);
-              }}
-            />
+            <label htmlFor={fileInputId}>Fotky ze session</label>
+            <div className={styles.fileUpload}>
+              <input
+                id={fileInputId}
+                className={styles.fileInput}
+                type="file"
+                accept="image/*"
+                multiple
+                onChange={(event) => {
+                  const files = Array.from(event.target.files ?? []);
+                  setSelectedFiles(files);
+                }}
+              />
+              <label htmlFor={fileInputId} className={styles.fileInputTrigger}>
+                <span>Vybrat fotky</span>
+                <small>PNG, JPG, WEBP, GIF, AVIF</small>
+              </label>
+
+              {selectedFiles.length > 0 && (
+                <div className={styles.fileList}>
+                  {selectedFiles.slice(0, 3).map((file) => (
+                    <span key={`${file.name}-${file.size}`}>{file.name}</span>
+                  ))}
+                  {selectedFiles.length > 3 && (
+                    <span>+{selectedFiles.length - 3} dalsi</span>
+                  )}
+                </div>
+              )}
+            </div>
 
             <div className={styles.formFoot}>
               <p>
@@ -216,7 +280,6 @@ export default function Home() {
         <section className={styles.timeline}>
           <div className={styles.timelineHead}>
             <h2>Historie hrani</h2>
-            <p>Dnesek je vzdy nahore, starsi prispevky najdes nize.</p>
           </div>
 
           {!isLoading && sortedPosts.length === 0 && (
@@ -244,10 +307,22 @@ export default function Home() {
                   style={{ animationDelay: `${Math.min(index * 70, 420)}ms` }}
                 >
                   <header>
-                    <h3>{post.gameTitle}</h3>
-                    <time dateTime={post.createdAt}>
-                      {formatDateLabel(post.createdAt)}
-                    </time>
+                    <div className={styles.postMeta}>
+                      <h3>{post.gameTitle}</h3>
+                      <time dateTime={post.createdAt}>
+                        {formatDateLabel(post.createdAt)}
+                      </time>
+                    </div>
+                    <button
+                      type="button"
+                      className={styles.deleteButton}
+                      disabled={deletingPostId === post.id}
+                      onClick={() => {
+                        void handleDeletePost(post);
+                      }}
+                    >
+                      {deletingPostId === post.id ? "Mazani..." : "Smazat"}
+                    </button>
                   </header>
 
                   <div
@@ -287,47 +362,15 @@ export default function Home() {
         </section>
       </main>
 
-      {lightbox && (
-        <div className={styles.lightbox} role="dialog" aria-modal="true">
-          <button
-            type="button"
-            className={styles.lightboxBackdrop}
-            onClick={closeLightbox}
-            aria-label="Zavrit nahled"
-          />
-
-          <div className={styles.lightboxPanel}>
-            <header>
-              <p>{lightbox.gameTitle}</p>
-              <button type="button" onClick={closeLightbox}>
-                Zavrit
-              </button>
-            </header>
-
-            <div className={styles.lightboxImageWrap}>
-              <Image
-                src={lightbox.images[lightbox.index]}
-                alt={`${lightbox.gameTitle} screenshot ${lightbox.index + 1}`}
-                fill
-                sizes="90vw"
-                unoptimized
-              />
-            </div>
-
-            <footer>
-              <button type="button" onClick={() => shiftLightbox(-1)}>
-                Predchozi
-              </button>
-              <span>
-                {lightbox.index + 1} / {lightbox.images.length}
-              </span>
-              <button type="button" onClick={() => shiftLightbox(1)}>
-                Dalsi
-              </button>
-            </footer>
-          </div>
-        </div>
-      )}
+      <Lightbox
+        open={Boolean(lightbox)}
+        close={() => setLightbox(null)}
+        slides={lightbox?.slides ?? []}
+        index={lightbox?.index ?? 0}
+        plugins={[Zoom, Thumbnails, Captions]}
+        captions={{ descriptionTextAlign: "center" }}
+        thumbnails={{ position: "bottom", width: 84, height: 52, border: 0 }}
+      />
     </div>
   );
 }
