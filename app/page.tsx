@@ -23,7 +23,23 @@ const ALLOWED_GAMES = [
   "League of Legends",
   "Goose Goose Duck",
   "Brawlhalla",
+  "Other",
 ] as const;
+
+const ONE_DAY_MS = 24 * 60 * 60 * 1000;
+
+function localDateKey(isoDate: string) {
+  const date = new Date(isoDate);
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function parseDateKey(key: string) {
+  const [year, month, day] = key.split("-").map(Number);
+  return new Date(year, (month || 1) - 1, day || 1);
+}
 
 function formatDateLabel(isoDate: string) {
   const date = new Date(isoDate);
@@ -82,6 +98,37 @@ export default function Home() {
     () => posts.reduce((sum, post) => sum + post.images.length, 0),
     [posts],
   );
+
+  const activeDays = useMemo(() => {
+    const uniqueDays = new Set(
+      posts.map((post) => localDateKey(post.createdAt)),
+    );
+    return uniqueDays.size;
+  }, [posts]);
+
+  const activityStreak = useMemo(() => {
+    const uniqueDays = [
+      ...new Set(posts.map((post) => localDateKey(post.createdAt))),
+    ].sort((a, b) => parseDateKey(b).getTime() - parseDateKey(a).getTime());
+
+    if (uniqueDays.length === 0) {
+      return 0;
+    }
+
+    let streak = 1;
+    for (let i = 1; i < uniqueDays.length; i += 1) {
+      const previous = parseDateKey(uniqueDays[i - 1]).getTime();
+      const current = parseDateKey(uniqueDays[i]).getTime();
+
+      if (previous - current === ONE_DAY_MS) {
+        streak += 1;
+      } else {
+        break;
+      }
+    }
+
+    return streak;
+  }, [posts]);
 
   const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -210,8 +257,17 @@ export default function Home() {
               <strong>{totalPhotos}</strong>
             </article>
             <article className={styles.metricCard}>
-              <span>Aktivni hry</span>
-              <strong>{ALLOWED_GAMES.length}</strong>
+              <span>Aktivni dny</span>
+              <strong>{activeDays}</strong>
+            </article>
+            <article className={`${styles.metricCard} ${styles.streakCard}`}>
+              <span>Streak</span>
+              <strong>
+                <span className={styles.flameIcon} aria-hidden="true">
+                  🔥
+                </span>
+                {activityStreak}
+              </strong>
             </article>
           </div>
         </section>
@@ -232,7 +288,7 @@ export default function Home() {
               ))}
             </select>
 
-            <label htmlFor={fileInputId}>Fotky ze session</label>
+            <label htmlFor={fileInputId}>Fotky</label>
             <div className={styles.fileUpload}>
               <input
                 id={fileInputId}

@@ -28,6 +28,7 @@ const allowedGameTitles = new Set([
   "League of Legends",
   "Goose Goose Duck",
   "Brawlhalla",
+  "Other",
 ]);
 
 function extensionFromFile(file: File) {
