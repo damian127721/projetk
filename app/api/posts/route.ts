@@ -1,4 +1,4 @@
-import { supabase } from "@/lib/supabase";
+import { getSupabaseServerClient } from "@/lib/supabase-server";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -43,14 +43,16 @@ async function cleanupUploadedImages(images: StoredImage[]) {
     return;
   }
 
-  await supabase.storage
+  const supabaseServer = getSupabaseServerClient();
+  await supabaseServer.storage
     .from("game-images")
     .remove(images.map((image) => image.filePath));
 }
 
 export async function GET() {
   try {
-    const { data: posts, error: postsError } = await supabase
+    const supabaseServer = getSupabaseServerClient();
+    const { data: posts, error: postsError } = await supabaseServer
       .from("game_posts")
       .select("*")
       .order("created_at", { ascending: false });
@@ -62,7 +64,7 @@ export async function GET() {
     const postsWithImages: GamePost[] = [];
 
     for (const post of posts ?? []) {
-      const { data: images, error: imagesError } = await supabase
+      const { data: images, error: imagesError } = await supabaseServer
         .from("post_images")
         .select("image_url")
         .eq("post_id", post.id)
@@ -90,6 +92,7 @@ export async function GET() {
 
 export async function POST(request: Request) {
   try {
+    const supabaseServer = getSupabaseServerClient();
     const formData = await request.formData();
     const rawGameTitle = formData.get("gameTitle");
 
@@ -118,11 +121,12 @@ export async function POST(request: Request) {
       const fileName = `${Date.now()}-${crypto.randomUUID()}${extensionFromFile(photo)}`;
       const filePath = `${uploadBatchId}/${fileName}`;
 
-      const { error: uploadError, data: uploadData } = await supabase.storage
-        .from("game-images")
-        .upload(filePath, fileBuffer, {
-          contentType: photo.type,
-        });
+      const { error: uploadError, data: uploadData } =
+        await supabaseServer.storage
+          .from("game-images")
+          .upload(filePath, fileBuffer, {
+            contentType: photo.type,
+          });
 
       if (uploadError || !uploadData) {
         await cleanupUploadedImages(uploadedImages);
@@ -136,7 +140,7 @@ export async function POST(request: Request) {
         );
       }
 
-      const { data: publicUrlData } = supabase.storage
+      const { data: publicUrlData } = supabaseServer.storage
         .from("game-images")
         .getPublicUrl(filePath);
 
@@ -147,7 +151,7 @@ export async function POST(request: Request) {
     }
 
     // Create post only after images are uploaded.
-    const { data: postData, error: postError } = await supabase
+    const { data: postData, error: postError } = await supabaseServer
       .from("game_posts")
       .insert({ game_title: rawGameTitle.trim() })
       .select()
@@ -158,15 +162,17 @@ export async function POST(request: Request) {
       throw postError || new Error("Failed to create post");
     }
 
-    const { error: imageRowsError } = await supabase.from("post_images").insert(
-      uploadedImages.map((image) => ({
-        post_id: postData.id,
-        image_url: image.publicUrl,
-      })),
-    );
+    const { error: imageRowsError } = await supabaseServer
+      .from("post_images")
+      .insert(
+        uploadedImages.map((image) => ({
+          post_id: postData.id,
+          image_url: image.publicUrl,
+        })),
+      );
 
     if (imageRowsError) {
-      await supabase.from("game_posts").delete().eq("id", postData.id);
+      await supabaseServer.from("game_posts").delete().eq("id", postData.id);
       await cleanupUploadedImages(uploadedImages);
       throw imageRowsError;
     }
