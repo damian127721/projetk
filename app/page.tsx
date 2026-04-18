@@ -90,7 +90,11 @@ export default function Home() {
       });
 
       if (!response.ok) {
-        throw new Error("Kolaz se nepodarilo vytvorit.");
+        const errorPayload = (await response.json().catch(() => null)) as {
+          error?: string;
+        } | null;
+
+        throw new Error(errorPayload?.error || "Kolaz se nepodarilo vytvorit.");
       }
 
       const data = (await response.json()) as { post?: GamePost };
@@ -101,8 +105,12 @@ export default function Home() {
       setPosts((current) => [data.post as GamePost, ...current]);
       setGameTitle("");
       setSelectedFiles([]);
-    } catch {
-      setErrorMessage("Kolaz se nepodarilo ulozit. Zkus to znovu.");
+    } catch (error) {
+      setErrorMessage(
+        error instanceof Error
+          ? error.message
+          : "Kolaz se nepodarilo ulozit. Zkus to znovu.",
+      );
     } finally {
       setIsSaving(false);
     }

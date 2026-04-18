@@ -10,6 +10,11 @@ type GamePost = {
   images: string[];
 };
 
+type StoredImage = {
+  filePath: string;
+  publicUrl: string;
+};
+
 const allowedExtensions = new Set([
   ".jpg",
   ".jpeg",
@@ -31,6 +36,16 @@ function extensionFromFile(file: File) {
   if (file.type === "image/gif") return ".gif";
   if (file.type === "image/avif") return ".avif";
   return ".jpg";
+}
+
+async function cleanupUploadedImages(images: StoredImage[]) {
+  if (images.length === 0) {
+    return;
+  }
+
+  await supabase.storage
+    .from("game-images")
+    .remove(images.map((image) => image.filePath));
 }
 
 export async function GET() {
@@ -79,10 +94,7 @@ export async function POST(request: Request) {
     const rawGameTitle = formData.get("gameTitle");
 
     if (typeof rawGameTitle !== "string" || !rawGameTitle.trim()) {
-      return Response.json(
-        { error: "Nazev hry je povinny." },
-        { status: 400 },
-      );
+      return Response.json({ error: "Nazev hry je povinny." }, { status: 400 });
     }
 
     const photos = formData
@@ -96,7 +108,45 @@ export async function POST(request: Request) {
       );
     }
 
-    // Insert post record
+    const uploadBatchId = crypto.randomUUID();
+    const uploadedImages: StoredImage[] = [];
+
+    // Upload all images first, so we do not create text-only posts on failure.
+    for (const photo of photos) {
+      const bytes = await photo.arrayBuffer();
+      const fileBuffer = Buffer.from(bytes);
+      const fileName = `${Date.now()}-${crypto.randomUUID()}${extensionFromFile(photo)}`;
+      const filePath = `${uploadBatchId}/${fileName}`;
+
+      const { error: uploadError, data: uploadData } = await supabase.storage
+        .from("game-images")
+        .upload(filePath, fileBuffer, {
+          contentType: photo.type,
+        });
+
+      if (uploadError || !uploadData) {
+        await cleanupUploadedImages(uploadedImages);
+        return Response.json(
+          {
+            error:
+              uploadError?.message ||
+              "Upload fotek selhal. Zkontroluj Storage policy pro bucket game-images.",
+          },
+          { status: 400 },
+        );
+      }
+
+      const { data: publicUrlData } = supabase.storage
+        .from("game-images")
+        .getPublicUrl(filePath);
+
+      uploadedImages.push({
+        filePath,
+        publicUrl: publicUrlData.publicUrl,
+      });
+    }
+
+    // Create post only after images are uploaded.
     const { data: postData, error: postError } = await supabase
       .from("game_posts")
       .insert({ game_title: rawGameTitle.trim() })
@@ -104,45 +154,28 @@ export async function POST(request: Request) {
       .single();
 
     if (postError || !postData) {
+      await cleanupUploadedImages(uploadedImages);
       throw postError || new Error("Failed to create post");
     }
 
-    const imageUrls: string[] = [];
-
-    // Upload images and create records
-    for (const photo of photos) {
-      const bytes = await photo.arrayBuffer();
-      const fileBuffer = Buffer.from(bytes);
-      const fileName = `${Date.now()}-${crypto.randomUUID()}${extensionFromFile(photo)}`;
-
-      const { error: uploadError, data: uploadData } = await supabase.storage
-        .from("game-images")
-        .upload(fileName, fileBuffer, {
-          contentType: photo.type,
-        });
-
-      if (uploadError || !uploadData) {
-        throw uploadError || new Error("Failed to upload image");
-      }
-
-      const { data: publicUrlData } = supabase.storage
-        .from("game-images")
-        .getPublicUrl(fileName);
-
-      imageUrls.push(publicUrlData.publicUrl);
-
-      // Insert image record
-      await supabase.from("post_images").insert({
+    const { error: imageRowsError } = await supabase.from("post_images").insert(
+      uploadedImages.map((image) => ({
         post_id: postData.id,
-        image_url: publicUrlData.publicUrl,
-      });
+        image_url: image.publicUrl,
+      })),
+    );
+
+    if (imageRowsError) {
+      await supabase.from("game_posts").delete().eq("id", postData.id);
+      await cleanupUploadedImages(uploadedImages);
+      throw imageRowsError;
     }
 
     const post: GamePost = {
       id: postData.id,
       gameTitle: postData.game_title,
       createdAt: postData.created_at,
-      images: imageUrls,
+      images: uploadedImages.map((image) => image.publicUrl),
     };
 
     return Response.json({ post }, { status: 201 });
